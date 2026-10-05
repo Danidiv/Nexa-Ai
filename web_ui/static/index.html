@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AZIZ AI — Build apps by chatting with AI</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #preview-frame { transition: width 0.3s ease; }
+</style>
+</head>
+<body class="min-h-screen bg-[#09090b] text-zinc-100 antialiased">
+<div id="app"></div>
+
+<script>
+// ===========================================================================
+// Real state. No fake progress timers, no simulated AI messages - every
+// value here is either what the user typed or what the real server
+// actually returned.
+// ===========================================================================
+const state = {
+  page: 'landing',          // 'landing' | 'auth' | 'builder'
+  authMode: 'login',
+  loggedIn: false,
+  username: null,
+  authError: '',
+  pendingPrompt: null,
+  pendingMode: null,
+  thread: [],                // [{role:'user'|'ai', text, taskId, status, logs, files, entry, mode}]
+  device: 'desktop',
+  viewMode: 'preview',
+};
+
+function icon(name, cls = '', width = 16) {
+  return `<iconify-icon icon="solar:${name}" width="${width}" class="${cls}"></iconify-icon>`;
+}
+
+function header() {
+  const right = state.loggedIn
+    ? `<span class="flex items-center gap-1 text-sm text-zinc-400">${icon('user-circle-linear')} ${state.username}</span>
+       <a href="#" onclick="doLogout(); return false;" class="flex items-center gap-1 text-sm text-zinc-500 hover:text-white">${icon('logout-2-linear')} Log out</a>`
+    : `<a href="#" onclick="go('auth'); return false;" class="text-sm text-zinc-400 hover:text-white">Log in</a>`;
+  return `<header class="flex h-16 items-center justify-between border-b border-zinc-800 px-6">
+    <a href="#" onclick="go('landing'); return false;" class="flex items-center gap-2">
+      <span class="grid h-8 w-8 place-items-center rounded-lg bg-indigo-500/15 text-indigo-400">${icon('magic-stick-3-bold', '', 18)}</span>
+      <span class="text-lg font-semibold tracking-tight">AZIZ AI</span>
+    </a>
+    <div class="flex items-center gap-4">${right}</div>
+  </header>`;
+}
+
+// ===========================================================================
+// LANDING PAGE
+// ===========================================================================
+function landing() {
+  return `${header()}
+  <main class="relative flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center overflow-hidden px-5">
+    <div class="absolute -top-20 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-indigo-500/20 blur-3xl"></div>
+    <div class="relative w-full max-w-2xl text-center">
+      <p class="text-xs font-medium uppercase tracking-[0.16em] text-indigo-400">Local, private, real</p>
+      <h1 class="mt-3 text-4xl font-semibold tracking-tight text-white sm:text-5xl">Build apps by chatting with AI</h1>
+      <p class="mx-auto mt-4 max-w-md text-sm leading-6 text-zinc-400">Describe a website or backend API. Your local model writes real, working code - no fake demo, no cloud required.</p>
+
+      <div class="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-3 text-left">
+        <textarea id="landing-prompt" rows="3" placeholder="e.g. a login page with separate CSS and JS files"
+          class="w-full resize-none bg-transparent px-2 py-1 text-sm text-white outline-none placeholder:text-zinc-600"></textarea>
+        <div class="mt-2 flex items-center justify-between border-t border-zinc-800 pt-2">
+          <select id="landing-mode" class="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-300 outline-none">
+            <option value="website">Website (HTML/CSS/JS)</option>
+            <option value="react">React App (Vite)</option>
+            <option value="react_ts">React + TS + shadcn/ui</option>
+            <option value="backend">Backend (Python API)</option>
+          </select>
+          <button onclick="submitLanding()" class="flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-400">
+            ${icon('rocket-2-bold')} Build
+          </button>
+        </div>
+      </div>
+      <div class="mt-4 flex flex-wrap justify-center gap-2">
+        ${['a login page', 'a React pricing page', 'a login API endpoint'].map(x =>
+          `<button onclick="quickPrompt('${x}')" class="rounded-full border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:border-zinc-600 hover:text-white">${x}</button>`
+        ).join('')}
+      </div>
+    </div>
+  </main>`;
+}
+
+function quickPrompt(text) {
+  document.getElementById('landing-prompt').value = text;
+  let mode = 'website';
+  if (text.includes('API') || text.includes('endpoint')) mode = 'backend';
+  else if (text.includes('React')) mode = 'react';
+  document.getElementById('landing-mode').value = mode;
+}
+
+function submitLanding() {
+  const val = document.getElementById('landing-prompt').value.trim();
+  const mode = document.getElementById('landing-mode').value;
+  if (!val) { alert('Type something to build first.'); return; }
+  state.pendingPrompt = val;
+  state.pendingMode = mode;
+  if (state.loggedIn) {
+    go('builder');
+    launchBuild(val, mode);
+  } else {
+    go('auth');
+  }
+}
+
+// ===========================================================================
+// AUTH PAGE
+// ===========================================================================
+function authPage() {
+  return `${header()}
+  <div class="flex min-h-[calc(100vh-4rem)] items-center justify-center px-5">
+    <div class="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/60 p-8">
+      <button onclick="go('landing')" class="mb-4 flex items-center gap-1 text-xs text-zinc-500 hover:text-white">${icon('arrow-left-linear')} Back</button>
+      <h1 class="text-2xl font-semibold tracking-tight text-white">${state.authMode === 'login' ? 'Log in' : 'Sign up'}</h1>
+      <p class="mt-1 text-sm text-zinc-500">${state.pendingPrompt ? "We'll build your project right after." : 'Build real apps with your local AI.'}</p>
+
+      <label class="mt-6 block text-xs font-medium text-zinc-400">Username</label>
+      <input id="auth-username" placeholder="yourname"
+        class="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-white outline-none focus:border-indigo-500">
+
+      <label class="mt-4 block text-xs font-medium text-zinc-400">Password</label>
+      <input id="auth-password" type="password" placeholder="••••••••"
+        class="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-white outline-none focus:border-indigo-500">
+
+      <button onclick="doAuth()" class="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-500 py-2.5 text-sm font-medium text-white hover:bg-indigo-400">
+        ${icon('login-3-bold')} ${state.authMode === 'login' ? 'Log in' : 'Sign up'}
+      </button>
+
+      <p class="mt-4 text-center text-xs text-zinc-500">
+        <a href="#" onclick="toggleAuthMode(); return false;" class="text-indigo-400 hover:text-indigo-300">
+          ${state.authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
+        </a>
+      </p>
+      <div class="mt-2 text-center text-xs text-red-400">${state.authError}</div>
+    </div>
+  </div>`;
+}
+
+function toggleAuthMode() {
+  state.authMode = state.authMode === 'login' ? 'signup' : 'login';
+  state.authError = '';
+  render();
+}
+
+async function doAuth() {
+  const username = document.getElementById('auth-username').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const endpoint = state.authMode === 'login' ? '/api/login' : '/api/signup';
+  const resp = await fetch(endpoint, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username, password}),
+  });
+  if (!resp.ok) {
+    state.authError = (await resp.json()).detail || 'Failed';
+    render();
+    return;
+  }
+  const data = await resp.json();
+  state.loggedIn = true;
+  state.username = data.username;
+  state.authError = '';
+  go('builder');
+  if (state.pendingPrompt) {
+    launchBuild(state.pendingPrompt, state.pendingMode);
+    state.pendingPrompt = null;
+  }
+}
+
+async function doLogout() {
+  await fetch('/api/logout', {method: 'POST'});
+  state.loggedIn = false;
+  state.username = null;
+  state.thread = [];
+  go('landing');
+}
+
+async function checkAuth() {
+  const resp = await fetch('/api/me');
+  if (resp.ok) {
+    const data = await resp.json();
+    state.loggedIn = true;
+    state.username = data.username;
+  }
+  render();
+}
+
+// ===========================================================================
+// BUILDER PAGE - chat-style thread on the left, live preview on the right.
+// The page shell renders ONCE per entry; live updates during a build use
+// targeted DOM writes (not a full re-render), so the preview <iframe>
+// never reloads mid-poll.
+// ===========================================================================
+function chatBubble(entry, index) {
+  if (entry.role === 'user') {
+    return `<div class="flex justify-end"><div class="max-w-[85%] rounded-xl rounded-tr-sm bg-indigo-500 px-4 py-2.5 text-sm text-white">${entry.text}</div></div>`;
+  }
+  const badgeClass = {
+    queued: 'bg-zinc-800 text-zinc-400', running: 'bg-indigo-500/15 text-indigo-300',
+    done: 'bg-emerald-500/15 text-emerald-400', error: 'bg-red-500/15 text-red-400',
+    verifying_runtime: 'bg-amber-500/15 text-amber-300', repairing_runtime: 'bg-orange-500/15 text-orange-300',
+  }[entry.status] || 'bg-zinc-800 text-zinc-500';
+
+  return `<div class="max-w-[95%] rounded-xl rounded-tl-sm border border-zinc-800 bg-zinc-900 p-3.5" id="ai-bubble-${index}">
+    <div class="flex items-center gap-2">
+      <span class="grid h-5 w-5 place-items-center rounded bg-indigo-500/15 text-indigo-400">${icon('magic-stick-3-linear', '', 12)}</span>
+      <span class="text-xs font-medium text-zinc-300">AZIZ AI</span>
+      <span class="ml-auto rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${badgeClass}" id="ai-badge-${index}">${entry.status}</span>
+    </div>
+    <div class="mt-3 space-y-1.5 text-xs leading-5 text-zinc-400" id="ai-log-${index}">${renderLogLines(entry.logs, entry.status)}</div>
+    <div class="mt-3 space-y-1.5" id="ai-files-${index}">${renderFiles(entry.files)}</div>
+    ${entry.mode === 'backend' && entry.status === 'done' ? testPanel(index) : ''}
+  </div>`;
+}
+
+function renderLogLines(logs, status) {
+  if (!logs || !logs.length) return 'Starting...';
+  return logs.map((line, i) => {
+    const isLast = i === logs.length - 1;
+    const ic = (status === 'running' && isLast)
+      ? icon('spinner-linear', 'spin text-indigo-400', 12)
+      : icon('check-circle-bold', 'text-emerald-400', 12);
+    return `<div class="flex items-start gap-1.5">${ic}<span>${line}</span></div>`;
+  }).join('');
+}
+
+function renderFiles(files) {
+  if (!files || !files.length) return '';
+  return files.map(f =>
+    `<div class="flex items-center justify-between rounded-lg bg-black/30 px-2.5 py-1.5 text-[11px]">
+       <span class="truncate">${f.path}</span>
+       <span class="ml-2 shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-500">${f.type}</span>
+     </div>`
+  ).join('');
+}
+
+function testPanel(index) {
+  return `<div class="mt-3 space-y-2 rounded-lg border border-zinc-800 bg-black/20 p-3">
+    <p class="text-[11px] font-medium text-zinc-400">Test this backend</p>
+    <input id="test-username-${index}" placeholder="username" value="admin" class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-white outline-none">
+    <input id="test-password-${index}" placeholder="password" value="1234" class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-white outline-none">
+    <button onclick="testBackend(${index})" class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-700 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800">${icon('play-bold', '', 12)} Send POST request</button>
+    <pre id="test-result-${index}" class="whitespace-pre-wrap rounded-lg bg-black/40 p-2 text-[11px] text-emerald-400"></pre>
+  </div>`;
+}
+
+function builderPage() {
+  const latest = state.thread.filter(e => e.role === 'ai').slice(-1)[0];
+  const entry = latest && latest.entry;
+  const taskId = latest && latest.taskId;
+
+  return `${header()}
+  <div class="flex h-[calc(100vh-4rem)] flex-col lg:flex-row">
+    <div class="flex w-full flex-col border-b border-zinc-800 lg:w-[420px] lg:border-b-0 lg:border-r">
+      <div id="chat-thread" class="flex-1 space-y-3 overflow-y-auto p-5">
+        ${state.thread.map((e, i) => chatBubble(e, i)).join('')}
+      </div>
+      <div class="border-t border-zinc-800 p-4">
+        <div class="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 p-2">
+          <select id="chat-mode" class="rounded-lg bg-zinc-950 px-2 py-1.5 text-xs text-zinc-300 outline-none">
+            <option value="website">Website</option>
+            <option value="react">React</option>
+            <option value="react_ts">React+TS</option>
+            <option value="backend">Backend</option>
+          </select>
+          <input id="chat-input" placeholder="Describe what to build next..."
+            class="flex-1 bg-transparent px-1 text-sm text-white outline-none placeholder:text-zinc-600"
+            onkeydown="if(event.key==='Enter') sendChat();">
+          <button onclick="sendChat()" class="rounded-lg bg-indigo-500 p-2 text-white hover:bg-indigo-400">${icon('paper-plane-outline', '', 16)}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-1 flex-col bg-zinc-950">
+      <div class="flex h-12 items-center gap-2 border-b border-zinc-800 px-4">
+        <button onclick="setDevice('desktop')" data-device="desktop" class="device-btn rounded-md p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-white">${icon('monitor-linear')}</button>
+        <button onclick="setDevice('tablet')" data-device="tablet" class="device-btn rounded-md p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-white">${icon('tablet-linear')}</button>
+        <button onclick="setDevice('mobile')" data-device="mobile" class="device-btn rounded-md p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-white">${icon('iphone-linear')}</button>
+        <span class="mx-1 h-4 w-px bg-zinc-800"></span>
+        <button onclick="setViewMode('preview')" data-view="preview" class="view-btn rounded-md px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800">Preview</button>
+        <button onclick="setViewMode('code')" data-view="code" class="view-btn rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-800">Code</button>
+        <span class="ml-auto text-xs text-zinc-600" id="preview-hint">${entry || 'Nothing built yet'}</span>
+      </div>
+      <div class="flex flex-1 items-start justify-center overflow-auto p-6">
+        <iframe id="preview-frame" class="h-[38rem] w-full max-w-full rounded-xl border border-zinc-800 bg-white"
+          ${entry ? `src="/preview/${taskId}/${entry}"` : `srcdoc="<body style='font-family:sans-serif;color:#888;padding:40px;'>Preview will appear here.</body>"`}></iframe>
+        <pre id="code-view" class="hidden h-[38rem] w-full max-w-full overflow-auto rounded-xl border border-zinc-800 bg-[#0d0d0f] p-5 font-mono text-xs leading-6 text-zinc-300"></pre>
+      </div>
+    </div>
+  </div>`;
+}
+
+function pingRuntimeFrame() {
+  const frame = document.getElementById('preview-frame');
+  if (!frame || !frame.contentWindow) return;
+  try { frame.contentWindow.postMessage({type:'AZIZ_RUNTIME_PING'}, '*'); } catch (_) {}
+}
+
+window.addEventListener('message', function(event) {
+  const data = event && event.data;
+  if (!data || data.type !== 'AZIZ_RUNTIME_REPORT' || !data.payload) return;
+  const payload = data.payload;
+  if (!payload.task_id) return;
+  const runtimeHeaders = {'Content-Type': 'text/plain;charset=UTF-8'};
+  if (payload.runtime_token) runtimeHeaders['X-AZIZ-Runtime-Token'] = payload.runtime_token;
+  fetch('/api/runtime-errors/' + encodeURIComponent(payload.task_id), {
+    method: 'POST',
+    headers: runtimeHeaders,
+    credentials: 'include',
+    body: JSON.stringify(payload),
+    keepalive: true
+  }).catch(function(){});
+});
+
+window.addEventListener('load', function() {
+  const frame = document.getElementById('preview-frame');
+  if (frame) {
+    frame.addEventListener('load', function() {
+      pingRuntimeFrame();
+      setTimeout(pingRuntimeFrame, 800);
+      setTimeout(pingRuntimeFrame, 1800);
+      setTimeout(pingRuntimeFrame, 3000);
+    });
+  }
+});
+
+function scrollChatToBottom() {
+  const c = document.getElementById('chat-thread');
+  if (c) c.scrollTop = c.scrollHeight;
+}
+
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const mode = document.getElementById('chat-mode').value;
+  if (!input || !input.value.trim()) return;
+  const text = input.value.trim();
+  input.value = '';
+  launchBuild(text, mode);
+}
+
+async function launchBuild(prompt, mode) {
+  state.thread.push({role: 'user', text: prompt});
+  const aiIndex = state.thread.length;
+  state.thread.push({role: 'ai', status: 'queued', logs: [], files: [], entry: null, taskId: null, mode});
+  render();
+
+  const resp = await fetch('/api/build', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt, mode}),
+  });
+  if (!resp.ok) {
+    state.thread[aiIndex].status = 'error';
+    state.thread[aiIndex].logs = ['Failed to start build: ' + (await resp.text())];
+    render();
+    return;
+  }
+  const {task_id} = await resp.json();
+  state.thread[aiIndex].taskId = task_id;
+  pollStatus(task_id, aiIndex);
+}
+
+function pollStatus(taskId, aiIndex) {
+  const timer = setInterval(async () => {
+    const resp = await fetch(`/api/status/${taskId}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const entry = state.thread[aiIndex];
+    entry.status = data.status;
+    entry.logs = data.logs;
+    entry.files = data.files || [];
+
+    // Targeted DOM updates only - never re-render the whole page here,
+    // or the live preview <iframe> would reload every poll tick.
+    const badge = document.getElementById(`ai-badge-${aiIndex}`);
+    const logBox = document.getElementById(`ai-log-${aiIndex}`);
+    const filesBox = document.getElementById(`ai-files-${aiIndex}`);
+    if (badge) { badge.textContent = data.status; }
+    if (logBox) { logBox.innerHTML = renderLogLines(data.logs, data.status); }
+    if (filesBox) { filesBox.innerHTML = renderFiles(data.files); }
+
+    if ((entry.mode === 'react' || entry.mode === 'react_ts') && data.port &&
+        (data.status === 'verifying_runtime' || data.status === 'repairing_runtime' || data.status === 'done')) {
+      entry.port = data.port;
+      const frame = document.getElementById('preview-frame');
+      const revision = Number(data.runtime_revision || 0);
+      if (frame && (entry.runtimeRevision !== revision || !frame.src.includes(`:${data.port}/`))) {
+        entry.runtimeRevision = revision;
+        frame.removeAttribute('srcdoc');
+        frame.src = `http://localhost:${data.port}/?aziz_runtime_revision=${revision}`;
+      }
+      const hint = document.getElementById('preview-hint');
+      if (hint) hint.textContent = data.status === 'done' ? `Runtime verified on port ${data.port}` : `Runtime verification: ${data.status}`;
+    }
+
+    if (data.status === 'done') {
+      clearInterval(timer);
+      if (entry.mode === 'website' && data.entry) {
+        entry.entry = data.entry;
+        const frame = document.getElementById('preview-frame');
+        if (frame) {
+          frame.removeAttribute('srcdoc');
+          frame.src = `/preview/${taskId}/${data.entry}`;
+        }
+        const hint = document.getElementById('preview-hint');
+        if (hint) hint.textContent = data.entry;
+      }
+      if (entry.mode === 'backend') {
+        render(); // need the test panel to actually appear in this bubble
+      }
+    } else if (data.status === 'error') {
+      clearInterval(timer);
+    }
+  }, 1000);
+}
+
+async function testBackend(index) {
+  const username = document.getElementById(`test-username-${index}`).value;
+  const password = document.getElementById(`test-password-${index}`).value;
+  const resultEl = document.getElementById(`test-result-${index}`);
+  resultEl.textContent = 'Sending...';
+  try {
+    const resp = await fetch('/api/test-backend', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({body: {username, password}}),
+    });
+    const data = await resp.json();
+    resultEl.textContent = `Status: ${data.status}\n${data.body}`;
+  } catch (e) {
+    resultEl.textContent = 'Request failed: ' + e;
+  }
+}
+
+function setDevice(d) {
+  const widths = {desktop: '100%', tablet: '48rem', mobile: '24rem'};
+  const frame = document.getElementById('preview-frame');
+  if (frame) frame.style.width = widths[d];
+  document.querySelectorAll('.device-btn').forEach(b => {
+    b.classList.toggle('bg-zinc-800', b.dataset.device === d);
+    b.classList.toggle('text-white', b.dataset.device === d);
+  });
+}
+
+async function setViewMode(mode) {
+  document.querySelectorAll('.view-btn').forEach(b => {
+    b.classList.toggle('bg-zinc-800', b.dataset.view === mode);
+    b.classList.toggle('text-white', b.dataset.view === mode);
+  });
+  const frame = document.getElementById('preview-frame');
+  const codeView = document.getElementById('code-view');
+  const latest = state.thread.filter(e => e.role === 'ai').slice(-1)[0];
+  if (mode === 'code') {
+    frame.classList.add('hidden');
+    codeView.classList.remove('hidden');
+    if (latest && latest.taskId && latest.entry) {
+      const resp = await fetch(`/preview/${latest.taskId}/${latest.entry}`);
+      codeView.textContent = resp.ok ? await resp.text() : '(no file yet)';
+    } else {
+      codeView.textContent = '(build something first)';
+    }
+  } else {
+    frame.classList.remove('hidden');
+    codeView.classList.add('hidden');
+  }
+}
+
+// ===========================================================================
+// Router
+// ===========================================================================
+const pages = {landing, auth: authPage, builder: builderPage};
+
+function render() {
+  document.getElementById('app').innerHTML = pages[state.page]();
+  if (state.page === 'builder') { setDevice('desktop'); scrollChatToBottom(); }
+}
+
+function go(page) { state.page = page; render(); window.scrollTo(0, 0); }
+
+checkAuth();
+</script>
+</body>
+</html>

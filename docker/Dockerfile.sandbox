@@ -1,0 +1,16 @@
+# Minimal sandbox image for running AI-generated backend code in isolation.
+# Stdlib-only for now (matches real_backend_builder.py's current output) -
+# extend with pip installs here once generation moves to a real framework.
+
+FROM python:3.11-slim
+
+# Don't run as root inside the container - if generated code ever tries
+# something it shouldn't, it's not doing it as root.
+RUN useradd --create-home --shell /bin/bash sandbox
+USER sandbox
+
+WORKDIR /app
+
+# No CMD here on purpose - the actual command (running the generated
+# server.py) is supplied at `docker run` time by sandbox_runner.py, since
+# it changes per-generation.
